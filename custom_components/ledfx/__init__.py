@@ -67,34 +67,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_update_options
     )
 
-    async def async_start(with_sleep: bool = False) -> None:
-        """Async start.
+    await _updater.async_config_entry_first_refresh()
 
-        :param with_sleep: bool
-        """
-
-        await _updater.async_config_entry_first_refresh()
-
-        if with_sleep:
-            await asyncio.sleep(DEFAULT_SLEEP)
-
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    if is_new:
-        await async_start()
-        await asyncio.sleep(DEFAULT_SLEEP)
-    else:
-        hass.loop.call_later(
-            DEFAULT_CALL_DELAY,
-            lambda: hass.async_create_task(async_start(True)),
-        )
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     async def async_stop(event: Event) -> None:
         """Async stop"""
 
         await _updater.async_stop()
 
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, async_stop)
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, async_stop)
+    )
 
     return True
 
@@ -110,6 +94,22 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
         return
 
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Reload config entry.
+
+    :param hass: HomeAssistant: Home Assistant object
+    :param entry: ConfigEntry: Config Entry object
+    :return bool: Is success
+    """
+
+    is_unloaded: bool = await async_unload_entry(hass, entry)
+    
+    if is_unloaded:
+        await async_setup_entry(hass, entry)
+
+    return is_unloaded
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

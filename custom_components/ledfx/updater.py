@@ -18,12 +18,8 @@ from homeassistant.components.switch import SwitchDeviceClass, SwitchEntityDescr
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import event
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.entity import (
-    DeviceEntryType,
-    DeviceInfo,
-    EntityCategory,
-    EntityDescription,
-)
+from homeassistant.helpers.entity import EntityCategory, EntityDescription
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import utcnow
@@ -76,6 +72,10 @@ PREPARE_METHODS_V1: Final = (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Exponential backoff configuration for reconnection attempts
+MAX_RECONNECT_DELAY: Final = 300  # 5 minutes
+MIN_RECONNECT_DELAY: Final = 5    # 5 seconds
+
 
 # pylint: disable=too-many-branches,too-many-lines,too-many-arguments
 class LedFxUpdater(DataUpdateCoordinator):
@@ -97,6 +97,7 @@ class LedFxUpdater(DataUpdateCoordinator):
 
     _scan_interval: int
     _is_only_check: bool = False
+    _connection_failures: int = 0
 
     def __init__(
         self,
@@ -133,6 +134,7 @@ class LedFxUpdater(DataUpdateCoordinator):
 
         self._scan_interval = scan_interval
         self._is_only_check = is_only_check
+        self._connection_failures = 0
 
         if hass is not None:
             super().__init__(
@@ -201,17 +203,78 @@ class LedFxUpdater(DataUpdateCoordinator):
             _err = _e
 
             self.code = codes.NOT_FOUND
+            
+            # Increment failure counter for reconnection backoff
+            self._connection_failures += 1
+            _LOGGER.warning(
+                "Connection error to LedFX at %s:%s (attempt %d). "
+                "Will retry with exponential backoff.",
+                self.ip,
+                self.port,
+                self._connection_failures,
+            )
         except LedFxRequestError as _e:
             _err = _e
 
             self.code = codes.FORBIDDEN
         else:
+            # Reset failure counter on successful update
+            if self._connection_failures > 0:
+                _LOGGER.info(
+                    "Successfully reconnected to LedFX at %s:%s",
+                    self.ip,
+                    self.port,
+                )
+            self._connection_failures = 0
+            
             if self._is_first_update:
                 self._is_first_update = False
 
         self.data[ATTR_STATE] = codes.is_success(self.code)
 
+        # Adjust update interval based on connection failures
+        if self._connection_failures > 0:
+            new_interval = self._get_reconnect_delay()
+            if new_interval != self.update_interval:
+                self.update_interval = new_interval
+                _LOGGER.debug(
+                    "Adjusting update interval to %s due to connection failures",
+                    self.update_interval,
+                )
+        elif self.update_interval != self._update_interval:
+            # Reset to normal interval when connection recovers
+            self.update_interval = self._update_interval
+            _LOGGER.debug(
+                "Resetting update interval to normal: %s", self.update_interval
+            )
+
         return self.data
+
+    def _get_reconnect_delay(self) -> timedelta:
+        """Calculate reconnection delay with exponential backoff.
+
+        :return timedelta: Reconnection delay
+        """
+        if self._connection_failures == 0:
+            return self._update_interval
+
+        # Exponential backoff: 5s, 10s, 20s, 40s, ..., capped at 5 minutes
+        delay = min(
+            MIN_RECONNECT_DELAY * (2 ** (self._connection_failures - 1)),
+            MAX_RECONNECT_DELAY,
+        )
+        return timedelta(seconds=delay)
+
+    async def async_request_refresh(self) -> None:
+        """Request refresh with reconnection support."""
+        # Reset to normal interval on manual refresh request
+        if self._connection_failures > 0:
+            self.update_interval = self._update_interval
+            _LOGGER.debug(
+                "Resetting update interval to normal: %s", self.update_interval
+            )
+        
+        await super().async_request_refresh()
 
     @cached_property
     def address(self) -> str:
