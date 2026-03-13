@@ -134,3 +134,4 @@ lib
 bin
 include
 share
+update_via_ssh.sh
