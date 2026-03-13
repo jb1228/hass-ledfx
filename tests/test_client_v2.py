@@ -198,7 +198,7 @@ async def test_preset(hass: HomeAssistant, httpx_mock: HTTPXMock) -> None:
     assert request.url == get_url(f"virtuals/{MOCK_DEVICE}/presets")
     assert (
         request.content
-        == b'{"category": "default_presets", "effect_id": "wavelength(Reactive)", "preset_id": "sunset-sweep"}'
+        == b'{"category": "ledfx_presets", "effect_id": "wavelength(Reactive)", "preset_id": "sunset-sweep"}'
     )
     assert request.method == Method.PUT
 

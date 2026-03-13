@@ -248,6 +248,11 @@ class LedFxClient:
         """
 
         prefix: str = "virtuals" if is_virtual else "devices"
+        if is_virtual:
+            category = {
+                "default_presets": "ledfx_presets",
+                "custom_presets": "user_presets",
+            }.get(category, category)
 
         return await self.request(
             f"{prefix}/{device_code}/presets",
